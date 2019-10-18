@@ -1,0 +1,10 @@
+index last_name * json name.last
+index age * json age
+set 1 {"name":{"first":"Tom","last":"Johnson"},"age":38}
+set 3 {"name":{"first":"Carol","last":"Anderson"},"age":52}
+set 2 {"name":{"first":"Janet","last":"Prichard"},"age":47}
+set 4 {"name":{"first":"Alan","last":"Cooper"},"age":28}
+find *
+findindex last_name
+indexes
+

@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
+
+	//"github.com/chzyer/readline"
 
 	"github.com/tidwall/buntdb"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -10,9 +14,9 @@ import (
 
 var revision = "(revision)" // replaced at build time by hg changeset
 
-func openBunt(dbName *string) *buntdb.DB {
+func openBunt(dbName string) *buntdb.DB {
 	// Open the data.db file. It will be created if it doesn't exist.
-	db, err := buntdb.Open(*dbName)
+	db, err := buntdb.Open(dbName)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -20,16 +24,17 @@ func openBunt(dbName *string) *buntdb.DB {
 	return db
 }
 
-func main() {
-	var key string
-	var value string
-	var db *buntdb.DB
+var (
+	dbName, key, value, itype, jarg string
+	db                              *buntdb.DB
+)
 
+func main() {
 	app := kingpin.New("bunter", "command line interface to buntdb")
 	// kingpin.Flag("bunter", "buntdb tool")
 	app.DefaultEnvars()
 	app.Version(revision)
-	dbName := app.Flag("db", "File name").String()
+	app.Flag("db", "File name").StringVar(&dbName)
 
 	cmdGet := app.Command("get", "get value")
 	cmdGet.Arg("key", "key").Required().StringVar(&key)
@@ -41,9 +46,14 @@ func main() {
 	cmdFind := app.Command("find", "find")
 	cmdFind.Arg("key", "key").Required().StringVar(&key)
 
+	cmdFindIndex := app.Command("findindex", "find using ndex")
+	cmdFindIndex.Arg("key", "key").Required().StringVar(&key)
+
 	cmdIndex := app.Command("index", "create index")
 	cmdIndex.Arg("index", "index name").Required().StringVar(&key)
 	cmdIndex.Arg("pattern", "pattern").Required().StringVar(&value)
+	cmdIndex.Arg("type", "index type").Required().StringVar(&itype)
+	cmdIndex.Arg("arg", "json field selection").StringVar(&jarg)
 
 	app.Command("indexes", "list indexes")
 
@@ -53,10 +63,19 @@ func main() {
 	cmdDel := app.Command("del", "delete key")
 	cmdDel.Arg("key", "key").Required().StringVar(&key)
 
-	cmd, err := app.Parse(os.Args[1:])
+	cmdFile := app.Command("commands", "process commands from file")
+	cmdFile.Arg("file", "file").Required().StringVar(&value)
+
+	process(app, os.Args[1:])
+}
+
+func process(app *kingpin.Application, args []string) {
+	cmd, err := app.Parse(args)
 	kingpin.FatalIfError(err, "Argument error")
-	db = openBunt(dbName)
-	defer db.Close()
+	if db == nil {
+		db = openBunt(dbName)
+		defer db.Close()
+	}
 
 	switch cmd {
 	case "get":
@@ -99,9 +118,34 @@ func main() {
 			return nil
 		})
 
+	case "findindex":
+		db.View(func(tx *buntdb.Tx) error {
+			tx.Ascend(key, func(k, v string) bool {
+				fmt.Printf("%s: %v\n", k, v)
+				return true
+			})
+			return nil
+		})
+
 	case "index":
+		var indexType func(a, b string) bool
+		switch itype {
+		case "string":
+			indexType = buntdb.IndexString
+		case "int":
+			indexType = buntdb.IndexInt
+		case "uint":
+			indexType = buntdb.IndexUint
+		case "float":
+			indexType = buntdb.IndexFloat
+		case "json":
+			indexType = buntdb.IndexJSON(jarg)
+		default:
+			fmt.Printf("bad index type - %s\n", itype)
+			return
+		}
 		db.Update(func(tx *buntdb.Tx) error {
-			err := tx.CreateIndex(key, value, buntdb.IndexString)
+			err := tx.CreateIndex(key, value, indexType)
 			if err != nil {
 				fmt.Printf("error - %v\n", err)
 			}
@@ -122,7 +166,7 @@ func main() {
 			list, err := tx.Indexes()
 			if err != nil {
 				fmt.Printf("error - %v\n", err)
-				return err
+				//return err
 			}
 			if len(list) == 0 {
 				fmt.Print("No additional indexes are defined\n")
@@ -131,5 +175,30 @@ func main() {
 			}
 			return nil
 		})
+	case "commands":
+		// read lines from file and call process on each one
+		f, err := os.Open(value)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		defer f.Close()
+
+		r := bufio.NewReader(f)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			args := strings.Fields(line)
+			if len(args) == 0 {
+				break
+			}
+			fmt.Printf("(%d) %v\n", len(args), args)
+			//process
+			process(app, args)
+		}
+
 	}
 }
